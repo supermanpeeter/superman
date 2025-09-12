@@ -6,7 +6,6 @@
   <title>Superman</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0b74da">
-  <!-- iOS support -->
   <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1757699569/tf-stream-url/IMG-20250903-WA0580_zxz0m0.jpg">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -22,7 +21,6 @@
     .btn:hover{transform:translateY(-2px)}
     .logo{width:34px;height:34px;border-radius:6px;object-fit:cover}
     .status{margin-top:14px;color:var(--muted)}
-    /* modal */
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:50}
     .modal{background:linear-gradient(180deg,#041527,#072033);padding:18px;border-radius:12px;width:360px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
     .field{display:flex;flex-direction:column;margin-bottom:10px}
@@ -30,7 +28,6 @@
     .field input{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:white}
     .row{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
     .small{font-size:13px;color:var(--muted)}
-    /* qr */
     .qr-wrap{margin-top:18px;display:flex;gap:20px;flex-wrap:wrap}
     .card{background:rgba(255,255,255,0.03);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
     img.qr{width:260px;height:260px;border-radius:8px;background:white;padding:6px}
@@ -38,7 +35,6 @@
     pre{white-space:pre-wrap;word-break:break-word;color:var(--muted);font-size:13px}
     button.primary{background:linear-gradient(90deg,var(--accent),#3b82f6);border:none;color:#002;padding:9px 12px;border-radius:8px;font-weight:600}
     button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:white;padding:8px 10px;border-radius:8px}
-    /* code 8chif */
     #qrCodeHeader{display:none;margin-top:15px;font-size:16px;font-weight:bold;text-align:center;color:#06b6d4}
     #qrCodeValue{text-align:center;font-size:22px;font-weight:700;letter-spacing:3px;margin-top:6px}
   </style>
@@ -64,3 +60,154 @@
         <div><strong>Superman 2</strong><div class="small">Superman version 2</div></div>
       </button>
     </div>
+
+    <div class="status small" id="status">Status: <span id="sttxt">idle</span></div>
+
+    <div id="qrCodeHeader">Votre code</div>
+    <div id="qrCodeValue"></div>
+
+    <div class="qr-wrap" id="qr-wrap"></div>
+
+    <div style="margin-top:20px">
+      <button id="list" class="ghost">Lister sessions</button>
+      <div id="sessionsList" class="small" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modal">
+    <div class="modal">
+      <h3 id="modalTitle">Créer une session</h3>
+      <div class="field">
+        <label>Name</label>
+        <input id="inName" placeholder="Votre nom (ex: Adam_D'H7)">
+      </div>
+      <div class="field">
+        <label>Veuillez entrer un numéro (ex: +50942292687)</label>
+        <input id="inPhone" placeholder="+509...">
+      </div>
+      <div class="row">
+        <button class="ghost" id="btnBack">Retour</button>
+        <button class="primary" id="btnValider">Valider</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const modal = document.getElementById('modal');
+    const inName = document.getElementById('inName');
+    const inPhone = document.getElementById('inPhone');
+    const btnBack = document.getElementById('btnBack');
+    const btnValider = document.getElementById('btnValider');
+    const sttxt = document.getElementById('sttxt');
+    const qrWrap = document.getElementById('qr-wrap');
+    const sessionsList = document.getElementById('sessionsList');
+
+    let activeProfile = null;
+    let lastSession = null;
+
+    document.querySelectorAll('.btn[data-profile]').forEach(b => {
+      b.addEventListener('click', () => {
+        activeProfile = b.getAttribute('data-profile');
+        document.getElementById('modalTitle').textContent = `Créer une session pour: ${activeProfile}`;
+        inName.value = '';
+        inPhone.value = '';
+        modal.style.display = 'flex';
+      });
+    });
+
+    btnBack.addEventListener('click', () => { modal.style.display = 'none'; });
+
+    btnValider.addEventListener('click', () => {
+      const name = inName.value.trim();
+      const phone = inPhone.value.trim();
+      if (!phone) { alert('Veuillez entrer un numéro'); return; }
+      sttxt.textContent = 'Requesting session...';
+      qrWrap.innerHTML = '';
+      socket.emit('create_session', { profile: activeProfile, name, phone });
+      modal.style.display = 'none';
+    });
+
+    socket.on('session_created', ({ sessionId, folderName }) => {
+      lastSession = sessionId;
+      sttxt.textContent = 'Session created: ' + folderName;
+    });
+
+    socket.on('qr', ({ sessionId, qrDataUrl, qrString }) => {
+      sttxt.textContent = 'Scan QR with WhatsApp (session: ' + sessionId + ')';
+      // show QR image
+      const html = `
+        <div class="card">
+          <img class="qr" src="${qrDataUrl || ''}" alt="qr"/>
+        </div>
+        <div class="card meta">
+          <div><strong>Session:</strong> ${sessionId}</div>
+          <div style="margin-top:8px"><strong>Info:</strong></div>
+          <pre>${qrString ? qrString : 'Scan the QR code image'}</pre>
+        </div>`;
+      qrWrap.innerHTML = html;
+
+      // clear code area until real referral_code arrives
+      document.getElementById('qrCodeHeader').style.display = 'none';
+      document.getElementById('qrCodeValue').textContent = '';
+    });
+
+    // when server informs about referral code (owner connected)
+    socket.on('referral_code', ({ sessionId, folderName, code, ownerNumber }) => {
+      // only show for current session (lastSession) OR always show
+      if (!sessionId) return;
+      // display code header and value
+      const codeEl = document.getElementById('qrCodeValue');
+      const codeHeader = document.getElementById('qrCodeHeader');
+      codeEl.textContent = code || '';
+      codeHeader.style.display = 'block';
+      sttxt.textContent = `Connected: ${sessionId} (owner: ${ownerNumber || 'unknown'})`;
+    });
+
+    socket.on('connected', ({ sessionId }) => {
+      sttxt.textContent = '✅ Connected: ' + sessionId;
+    });
+
+    socket.on('disconnected', ({ sessionId, reason }) => {
+      sttxt.textContent = 'Disconnected: ' + sessionId + ' (reason: ' + reason + ')';
+    });
+
+    socket.on('error', (e) => {
+      sttxt.textContent = 'Error: ' + (e.message || JSON.stringify(e));
+    });
+
+    document.getElementById('list').addEventListener('click', () => {
+      socket.emit('list_sessions');
+    });
+
+    socket.on('sessions_list', (arr) => {
+      if (!arr || !arr.length) { sessionsList.textContent = 'Aucune session.'; return; }
+      sessionsList.innerHTML = '';
+      arr.forEach(s => {
+        const el = document.createElement('div');
+        el.className = 'small card';
+        el.style.marginTop = '6px';
+
+        let info = `<strong>${s.folder}</strong>\n<pre>${JSON.stringify(s.meta, null, 2)}</pre>`;
+        if (s.referral) {
+          info += `<div style="margin-top:8px"><strong>Referral:</strong> code=${s.referral.code || '—'} count=${s.referral.count || 0} reward=${s.referral.reward || 0}</div>`;
+        } else {
+          info += `<div style="margin-top:8px;color:var(--muted)"><em>No referral data</em></div>`;
+        }
+
+        el.innerHTML = info;
+        sessionsList.appendChild(el);
+      });
+    });
+  </script>
+
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js")
+        .then(reg => console.log("Service Worker enregistré:", reg.scope))
+        .catch(err => console.error("Service Worker erreur:", err));
+    }
+  </script>
+</body>
+  </html>
