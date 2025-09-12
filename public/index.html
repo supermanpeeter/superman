@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Superman</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0b74da">
+  <!-- iOS support -->
+  <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1757699569/tf-stream-url/IMG-20250903-WA0580_zxz0m0.jpg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    :root{--bg:#0b0b0e;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;color-scheme:dark}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:linear-gradient(180deg,#0b0b0e 0%, #121212 100%);color:white;margin:0;padding:28px}
+    .container{max-width:920px;margin:0 auto}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+    header img{width:48px;height:48px;border-radius:8px}
+    h1{font-size:20px;margin:0}
+    .buttons{display:flex;gap:12px;margin:18px 0}
+    .btn{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.04);padding:12px 18px;border-radius:10px;cursor:pointer;display:flex;gap:10px;align-items:center}
+    .btn:hover{transform:translateY(-2px)}
+    .logo{width:34px;height:34px;border-radius:6px;object-fit:cover}
+    .status{margin-top:14px;color:var(--muted)}
+    /* modal */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:50}
+    .modal{background:linear-gradient(180deg,#041527,#072033);padding:18px;border-radius:12px;width:360px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    .field{display:flex;flex-direction:column;margin-bottom:10px}
+    .field label{font-size:13px;color:var(--muted);margin-bottom:6px}
+    .field input{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:white}
+    .row{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
+    .small{font-size:13px;color:var(--muted)}
+    /* qr */
+    .qr-wrap{margin-top:18px;display:flex;gap:20px;flex-wrap:wrap}
+    .card{background:rgba(255,255,255,0.03);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
+    img.qr{width:260px;height:260px;border-radius:8px;background:white;padding:6px}
+    .meta{max-width:300px}
+    pre{white-space:pre-wrap;word-break:break-word;color:var(--muted);font-size:13px}
+    button.primary{background:linear-gradient(90deg,var(--accent),#3b82f6);border:none;color:#002;padding:9px 12px;border-radius:8px;font-weight:600}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:white;padding:8px 10px;border-radius:8px}
+    /* code 8chif */
+    #qrCodeHeader{display:none;margin-top:15px;font-size:16px;font-weight:bold;text-align:center;color:#06b6d4}
+    #qrCodeValue{text-align:center;font-size:22px;font-weight:700;letter-spacing:3px;margin-top:6px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="https://res.cloudinary.com/dckwrqrur/image/upload/v1757699569/tf-stream-url/IMG-20250903-WA0580_zxz0m0.jpg" alt="logo">
+      <div>
+        <h1>Superman</h1>
+        <div class="small">Choisissez un profil, entrez le nom & numéro, puis validez pour obtenir le QR</div>
+      </div>
+    </header>
+
+    <div class="buttons">
+      <button class="btn" data-profile="Superman">
+        <img class="logo" src="https://res.cloudinary.com/dckwrqrur/image/upload/v1757699598/tf-stream-url/IMG-20250903-WA0576_dxkdcw.jpg" alt="Adam">
+        <div><strong>Superman</strong><div class="small">Superman version 1</div></div>
+      </button>
+
+      <button class="btn" data-profile="Superman">
+        <img class="logo" src="https://res.cloudinary.com/dckwrqrur/image/upload/v1757699633/tf-stream-url/IMG-20250903-WA0013_lohb7y.jpg" alt="Superman">
+        <div><strong>Superman 2</strong><div class="small">Superman version 2</div></div>
+      </button>
+    </div>
