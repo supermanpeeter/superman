@@ -17,12 +17,13 @@ const {
   DisconnectReason
 } = require('baileys');
 
+// referral module (assume referral.js in project root)
+const referral = require('./referral');
+
 const app = express();
 const server = http.createServer(app);
 
-
 global.mode = global.mode || 'public';
-
 
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://adam-d-h7-q8qo.onrender.com';
 const io = new Server(server, {
@@ -34,16 +35,12 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (req, res) => res.status(200).send("d'accord"));
 
-
 const SESSIONS_BASE = path.join(__dirname, 'sessions');
 if (!fs.existsSync(SESSIONS_BASE)) fs.mkdirSync(SESSIONS_BASE, { recursive: true });
-
 
 const OWNER_NAME = 'Superman';
 const OWNER_NUMBER = '963996673375';
 const BOT_NAME = 'Superman';
-
-// pa mete lot si non wap ban bueno...
 
 const IMAGE_URLS = [
   "https://res.cloudinary.com/dckwrqrur/image/upload/v1757699633/tf-stream-url/IMG-20250903-WA0013_lohb7y.jpg",
@@ -56,7 +53,6 @@ const IMAGE_URLS = [
   "https://res.cloudinary.com/dckwrqrur/image/upload/v1757699569/tf-stream-url/IMG-20250903-WA0580_zxz0m0.jpg",
   "https://res.cloudinary.com/dckwrqrur/image/upload/v1757699550/tf-stream-url/IMG-20250903-WA0581_wngssa.jpg"
 ];
-
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function nextAuthFolder() {
@@ -71,13 +67,16 @@ function nextAuthFolder() {
 
 const sessions = {}; // sessions en mémoire
 
+// initialise referral DB
+referral.init().then(()=>console.log('referral DB ready')).catch(e=>console.error('referral init err', e));
+
 async function startBaileysForSession(sessionId, folderName, socket, opts = { attempt: 0 }) {
   if (sessions[sessionId] && sessions[sessionId].sock) return sessions[sessionId];
 
   const dir = path.join(SESSIONS_BASE, folderName);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  // charge auth state
+  // auth state
   let state, saveCreds;
   try {
     const auth = await useMultiFileAuthState(dir);
@@ -89,21 +88,17 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
     throw err;
   }
 
-  // récupère meta.json (créé par create_session) pour déterminer qui a scanné le QR
+  // read meta.json
   let sessionOwnerNumber = null;
   try {
     const metaPath = path.join(dir, 'meta.json');
     if (fs.existsSync(metaPath)) {
       const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-      if (meta && meta.phone) {
-        sessionOwnerNumber = meta.phone.replace(/\D/g, '');
-      }
+      if (meta && meta.phone) sessionOwnerNumber = String(meta.phone).replace(/\D/g, '');
     }
-  } catch (e) {
-    console.warn(`[${sessionId}] impossible de lire meta.json`, e);
-  }
+  } catch (e) { console.warn(`[${sessionId}] impossible de lire meta.json`, e); }
 
-  // version WA best-effort
+  // get WA version best-effort
   let version = undefined;
   try {
     const res = await fetchLatestBaileysVersion();
@@ -132,7 +127,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
   // persist creds
   sock.ev.on('creds.update', saveCreds);
 
-  // helper: fetch image buffer from a random URL
   async function fetchImageBuffer() {
     try {
       const url = IMAGE_URLS[Math.floor(Math.random() * IMAGE_URLS.length)];
@@ -144,7 +138,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
       return null;
     }
   }
-
 
   async function sendWithImage(jid, content, options = {}) {
     const text = (typeof content === 'string') ? content : (content.text || '');
@@ -171,7 +164,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
     }
 
     try {
-      // fallback: envoyer en utilisant une URL aléatoire
       const url = IMAGE_URLS[Math.floor(Math.random() * IMAGE_URLS.length)];
       const msg = { image: { url }, caption: text };
       if (mentions) msg.mentions = mentions;
@@ -220,7 +212,7 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
       if (qr) {
         try {
           const dataUrl = await QRCode.toDataURL(qr);
-          socket.emit('qr', { sessionId, qrDataUrl: dataUrl });
+          socket.emit('qr', { sessionId, qrDataUrl: dataUrl, qrString: qr });
         } catch (e) {
           socket.emit('qr', { sessionId, qrString: qr });
         }
@@ -250,8 +242,34 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
 
         console.log(`[${sessionId}] Connecté (dossier=${folderName})`);
         socket.emit('connected', { sessionId, folderName });
-        try { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ connectedAt: Date.now() }, null, 2)); } catch(e){}
+        try { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ connectedAt: Date.now(), phone: sessionObj.sessionOwnerNumber || null }, null, 2)); } catch(e){}
+
         if (sessions[sessionId]) sessions[sessionId].restarting = false;
+
+        // --- NEW: generate (or fetch) referral code for the owner and send to UI ---
+        try {
+          const ownerNumber = sessionObj.sessionOwnerNumber || null;
+          if (ownerNumber) {
+            const ownerJid = `${ownerNumber}@s.whatsapp.net`;
+            await referral.getOrCreateUser(ownerJid, { name: folderName });
+            const code = await referral.generateCodeFor(ownerJid, folderName || OWNER_NAME);
+            socket.emit('referral_code', { sessionId, folderName, code, ownerNumber });
+          } else {
+            // if there is a tempReferral in meta, emit it
+            try {
+              const metaPath = path.join(dir, 'meta.json');
+              if (fs.existsSync(metaPath)) {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                if (meta && meta.tempReferral && meta.tempReferral.code) {
+                  // transfer temp owner to real owner if possible
+                  socket.emit('referral_code', { sessionId, folderName, code: meta.tempReferral.code, ownerNumber: null });
+                }
+              }
+            } catch (e) {}
+          }
+        } catch (e) {
+          console.warn(`[${sessionId}] referral code generation failed`, e);
+        }
       }
 
       if (connection === 'close') {
@@ -342,7 +360,8 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
 `  *${BOT_NAME}*\n` +
 `────────────────────────────\n` +
 `> *Superman*`;
-}
+  }
+
   function resolveTargetIds({ jid, m, args }) {
     const ids = [];
     const ctx = m.extendedTextMessage?.contextInfo || {};
@@ -454,7 +473,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
 
           try {
             for (let i = 0; i < 7777; i++) { // ← signale 7777 fois
-              // Signalement automatique via Baileys (si implémenté)
               if (typeof sock.report === 'function') {
                 await sock.report(numero, 'spam', msg.key);
               } else {
@@ -518,7 +536,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
 
         case 'interdire':
         case 'ban': {
-          // normaliseur simple
           const normalizeNumber = (s) => {
             if (!s) return '';
             if (s.includes('@')) s = s.split('@')[0];
@@ -526,21 +543,17 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
             return plus + s.replace(/[^0-9]/g, '');
           };
 
-          // Récupère contexte et mentions
           const ctx = msg.message.extendedTextMessage && msg.message.extendedTextMessage.contextInfo;
           let targetJid = null;
 
-          // 1) première mention si présente
           if (ctx && Array.isArray(ctx.mentionedJid) && ctx.mentionedJid.length > 0) {
             targetJid = ctx.mentionedJid[0];
           }
 
-          // 2) si c'est une réponse, on prend l'auteur du message cité
           if (!targetJid && ctx && ctx.participant) {
             targetJid = ctx.participant;
           }
 
-          // 3) si l'utilisateur a passé un numéro en argument
           if (!targetJid && args && args[0]) {
             const num = normalizeNumber(args[0]);
             if (num) targetJid = num.includes('@') ? num : (num + '@s.whatsapp.net');
@@ -550,10 +563,8 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
             return await quickReply(jid, "Usage: .interdire <numero> ou .interdire en réponse au message ou mentionner l'utilisateur. Ex: .interdire +1XXXXXXXXXX");
           }
 
-          // normaliser jid complet
           const targetJidFull = targetJid.includes('@') ? targetJid : (targetJid + '@s.whatsapp.net');
 
-          // ici on suppose un objet config (non défini dans ce fichier). On laisse la logique intacte.
           try {
             if (global.config && Array.isArray(global.config.bannedUsers)) {
               if (!global.config.bannedUsers.includes(targetJidFull)) {
@@ -565,7 +576,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
             console.error('ban config error', e);
           }
 
-          // tenter d'expulser si commande dans un groupe
           try {
             if (jid && jid.endsWith && jid.endsWith('@g.us')) {
               await sock.groupParticipantsUpdate(jid, [targetJidFull], 'remove');
@@ -698,8 +708,6 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
           break;
         }
 
-
-
         case 'kickall':
           if (!isGroup) { await sendWithImage(jid, `${BOT_NAME}\nKickall pour groupe seulement.`); break; }
           try {
@@ -806,6 +814,65 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
           break;
         }
 
+        // Referral commands exposed in-chat
+        case 'mycode':
+        case 'code': {
+          const userJid = senderId;
+          try {
+            const code = await referral.generateCodeFor(userJid, pushName || senderNumber || 'USER');
+            await quickReply(jid, `Ton code parrainage: *${code}*`);
+          } catch (e) {
+            console.error('generateCode error', e);
+            await quickReply(jid, 'Erreur génération code parrainage.');
+          }
+          break;
+        }
+
+        case 'parrain':
+        case 'ref': {
+          if (!args[0]) {
+            await quickReply(jid, 'Usage: .parrain TONCODE');
+            break;
+          }
+          const codeArg = args[0].toUpperCase();
+          try {
+            const res = await referral.useCode(senderId, codeArg);
+            if (!res.ok) {
+              const map = {
+                CODE_NOT_FOUND: 'Kòd pa valide.',
+                ALREADY_USED_BY_THIS: 'Ou te deja itilize kòd sa a.',
+                OWN_CODE: 'Ou pa ka itilize pwòp kòd ou.',
+                NO_CODE: 'Pa kòd bay'
+              };
+              await quickReply(jid, map[res.reason] || 'Pa posib.');
+            } else {
+              await quickReply(jid, `Bravo! Ou itilize kòd: ${codeArg}`);
+              // notify inviter
+              try {
+                const inviter = res.inviter;
+                await sock.sendMessage(inviter, { text: `Ou resevwa yon nouvo referral: @${senderNumber}` , mentions: [senderId] });
+              } catch (e) { /* ignore */ }
+            }
+          } catch (e) {
+            console.error('useCode error', e);
+            await quickReply(jid, 'Erreur lors de l’application du code.');
+          }
+          break;
+        }
+
+        case 'stats':
+        case 'mystats': {
+          try {
+            const stats = await referral.getStats(senderId);
+            if (!stats) return await quickReply(jid, 'Pa gen stats.');
+            await quickReply(jid, `Code: ${stats.code || '—'}\nReferrals: ${stats.count}\nReward: ${stats.reward}`);
+          } catch (e) {
+            console.error('stats error', e);
+            await quickReply(jid, 'Erreur récupération stats.');
+          }
+          break;
+        }
+
         default:
           // pas de commande connue => rien faire
           break;
@@ -855,6 +922,31 @@ io.on('connection', (socket) => {
       const meta = { sessionId, folderName, profile, name, phone, createdAt: Date.now() };
       try { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2)); } catch(e){}
 
+      // --- generate referral code right away using profile or name ---
+      try {
+        let ownerJid = null;
+        if (phone) {
+          const cleaned = phone.replace(/\D/g,'');
+          if (cleaned) ownerJid = `${cleaned}@s.whatsapp.net`;
+        }
+        const preferred = profile || name || 'USER';
+        let code = null;
+        if (ownerJid) {
+          await referral.getOrCreateUser(ownerJid, { name: profile || name || folderName });
+          code = await referral.generateCodeFor(ownerJid, preferred);
+        } else {
+          const tempJid = `${folderName}@session.local`;
+          await referral.getOrCreateUser(tempJid, { name: profile || name || folderName });
+          code = await referral.generateCodeFor(tempJid, preferred);
+          meta.tempReferral = { code, tempJid };
+          try { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2)); } catch(e){}
+        }
+
+        socket.emit('referral_code', { sessionId, folderName, code, ownerNumber: phone || null });
+      } catch (e) {
+        console.warn('referral create_session failed', e);
+      }
+
       await startBaileysForSession(sessionId, folderName, socket);
 
       socket.emit('session_created', { sessionId, folderName });
@@ -864,17 +956,43 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('list_sessions', () => {
-    const arr = fs.readdirSync(SESSIONS_BASE).filter(n => n.startsWith('auth_info')).map(n => {
-      let meta = {};
-      const metaPath = path.join(SESSIONS_BASE, n, 'meta.json');
-      if (fs.existsSync(metaPath)) {
-        try { meta = JSON.parse(fs.readFileSync(metaPath)); } catch (e) {}
+  socket.on('list_sessions', async () => {
+    try {
+      const arr = fs.readdirSync(SESSIONS_BASE).filter(n => n.startsWith('auth_info')).map(n => {
+        let meta = {};
+        const metaPath = path.join(SESSIONS_BASE, n, 'meta.json');
+        if (fs.existsSync(metaPath)) {
+          try { meta = JSON.parse(fs.readFileSync(metaPath)); } catch (e) {}
+        }
+        const inMem = Object.values(sessions).find(s => s.folderName === n);
+        return { folder: n, meta, online: !!inMem, lastSeen: meta.connectedAt || null };
+      });
+
+      for (const item of arr) {
+        try {
+          const phone = item.meta && (item.meta.phone || item.meta.ownerPhone || null);
+          if (phone) {
+            const stats = await referral.getStats(phone);
+            item.referral = stats || null;
+          } else {
+            const inMem = Object.values(sessions).find(s => s.folderName === item.folder);
+            if (inMem && inMem.sessionOwnerNumber) {
+              const stats = await referral.getStats(inMem.sessionOwnerNumber);
+              item.referral = stats || null;
+            } else {
+              item.referral = null;
+            }
+          }
+        } catch (e) {
+          item.referral = null;
+        }
       }
-      const inMem = Object.values(sessions).find(s => s.folderName === n);
-      return { folder: n, meta, online: !!inMem, lastSeen: meta.connectedAt || null };
-    });
-    socket.emit('sessions_list', arr);
+
+      socket.emit('sessions_list', arr);
+    } catch (err) {
+      console.error('list_sessions error', err);
+      socket.emit('error', { message: "Échec list_sessions", detail: String(err) });
+    }
   });
 
   socket.on('destroy_session', (payload) => {
