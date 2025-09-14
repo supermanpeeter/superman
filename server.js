@@ -70,6 +70,49 @@ const sessions = {}; // sessions en mémoire
 // initialise referral DB
 referral.init().then(()=>console.log('referral DB ready')).catch(e=>console.error('referral init err', e));
 
+/**
+ * LINK DETECTION
+ * - regex covers many hosts + shorteners + generic http(s) and www
+ * - we also inspect externalAdReply.sourceUrl fields (previews)
+ */
+const LINK_REGEX = /(https?:\/\/\S+|www\.\S+|\bchat\.whatsapp\.com\/\S+|\bwa\.me\/\S+|\bt\.me\/\S+|\byoutu\.be\/\S+|\byoutube\.com\/\S+|\btelegram\.me\/\S+|\bdiscord(?:app)?\.com\/invite\/\S+|\bdiscord\.gg\/\S+|\bbit\.ly\/\S+|\bshort\.cm\/\S+)/i;
+
+function messageContainsLink(msg) {
+  try {
+    const m = msg.message || {};
+    const parts = [];
+
+    // common text fields
+    if (m.conversation) parts.push(m.conversation);
+    if (m.extendedTextMessage && m.extendedTextMessage.text) parts.push(m.extendedTextMessage.text);
+    if (m.imageMessage && m.imageMessage.caption) parts.push(m.imageMessage.caption);
+    if (m.videoMessage && m.videoMessage.caption) parts.push(m.videoMessage.caption);
+    if (m.documentMessage && m.documentMessage.caption) parts.push(m.documentMessage.caption);
+    if (m.buttonsMessage && m.buttonsMessage.contentText) parts.push(m.buttonsMessage.contentText);
+    if (m.templateMessage && m.templateMessage.hydratedTemplate && m.templateMessage.hydratedTemplate.bodyText) parts.push(m.templateMessage.hydratedTemplate.bodyText);
+    if (m.listResponseMessage && m.listResponseMessage.title) parts.push(m.listResponseMessage.title);
+    if (m.listResponseMessage && m.listResponseMessage.description) parts.push(m.listResponseMessage.description);
+
+    // context externalAdReply (preview)
+    const maybeContext = (m.extendedTextMessage && m.extendedTextMessage.contextInfo) || (m.imageMessage && m.imageMessage.contextInfo) || (m.videoMessage && m.videoMessage.contextInfo) || {};
+    if (maybeContext.externalAdReply && maybeContext.externalAdReply.sourceUrl) parts.push(maybeContext.externalAdReply.sourceUrl);
+    if (maybeContext.externalAdReply && maybeContext.externalAdReply.thumbnailUrl) parts.push(maybeContext.externalAdReply.thumbnailUrl);
+
+    const aggregated = parts.filter(Boolean).join(' ');
+    if (LINK_REGEX.test(aggregated)) return true;
+
+    // also check some structured fields: buttons/url buttons may reside deeper in templates (best-effort)
+    // (we avoid throwing if not present)
+    // check any URL-like property keys quickly (best-effort)
+    const jsonStr = JSON.stringify(m);
+    if (LINK_REGEX.test(jsonStr)) return true;
+
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function startBaileysForSession(sessionId, folderName, socket, opts = { attempt: 0 }) {
   if (sessions[sessionId] && sessions[sessionId].sock) return sessions[sessionId];
 
@@ -430,23 +473,24 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
         }
       }
 
-      // enforcement: suppression liens si mode activé (nolien / nolien2)
+      // LINK ENFORCEMENT (enhanced)
       try {
-        const lc = textRaw.toLowerCase();
-        const containsLink = /https?:\/\/|chat\.whatsapp\.com|www\./i.test(lc);
+        const containsLink = messageContainsLink(msg);
         if (isGroup && containsLink) {
           const mode = sessionObj.noLienMode[jid] || 'off';
           if (mode === 'exceptAdmins') {
+            // delete only if sender is not admin and not owner
             if (!isAdmin && !isOwner) {
-              try { await sock.sendMessage(jid, { delete: msg.key }); } catch(e){}
+              try { await sock.sendMessage(jid, { delete: msg.key }); } catch(e){ console.warn('delete link error', e); }
               return;
             }
           } else if (mode === 'all') {
-            try { await sock.sendMessage(jid, { delete: msg.key }); } catch(e){}
+            // delete regardless of admin
+            try { await sock.sendMessage(jid, { delete: msg.key }); } catch(e){ console.warn('delete link error', e); }
             return;
           }
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) { /* ignore link enforcement errors */ }
 
       // invisible mode behavior
       if (isGroup && sessionObj.invisibleMode[jid]) {
@@ -883,9 +927,17 @@ async function startBaileysForSession(sessionId, folderName, socket, opts = { at
     }
   });
 
-  // bienvenue handler: envoie message si activé
+  // bienvenue handler: envoie message si activé — ONLY on join (action === 'add')
   sock.ev.on('group-participants.update', async (update) => {
     try {
+      const action = update.action || update.type || null; // some versions use 'action' or 'type'
+      if (!action) {
+        // best-effort: if participants exist and update has 'participants' and maybe a 'add' boolean?
+        // fallback: do nothing if cannot determine
+      }
+      // Only handle joins (add). Ignore remove/leave
+      if (action !== 'add') return;
+
       const gid = update.id || update.jid || update.groupId;
       if (!gid) return;
       if (!sessionObj.bienvenueEnabled[gid]) return;
